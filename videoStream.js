@@ -3,9 +3,9 @@ var Mpeg1Muxer, STREAM_MAGIC_BYTES, VideoStream, events, util, ws
 ws = require('ws')
 
 util = require('util')
-
+url = require('url')
+redis = require('redis')
 events = require('events')
-
 Mpeg1Muxer = require('./mpeg1muxer')
 
 STREAM_MAGIC_BYTES = "jsmp" // Must be 4 bytes
@@ -92,7 +92,30 @@ VideoStream.prototype.pipeStreamToSocketServer = function() {
     port: this.wsPort
   })
   this.wsServer.on("connection", (socket, request) => {
-    return this.onSocketConnect(socket, request)
+    var client = redis.createClient('6379', '127.0.0.1', {db:0});
+    var key = "";
+    try {
+    	key = url.parse(request.url).query.split('=')[1]; // Extract random_id and check in redis
+    } catch(e) {
+ 	console.log("invalid websocket uri detected: " + request.uri);
+    }
+    
+    client.auth("password", function() {console.log("Redis connected, authenticating user");});
+    var self = this;
+    client.get(key, function(err, reply) {
+     // reply is null when the key is missing
+     if(reply == null){
+	console.log("Unauthenticated connection rejected");
+	socket.send('HTTP/1.1 401 Unauthorized\r\n\r\n');
+	socket.close();
+	return;
+     }
+     else{
+	console.log("Key : " + key + " exist in redis with value : " + reply);
+	console.log("Authenticated access by : " + reply);
+	return self.onSocketConnect(socket, request);
+     }
+    });
   })
   this.wsServer.broadcast = function(data, opts) {
     var results
@@ -122,7 +145,6 @@ VideoStream.prototype.onSocketConnect = function(socket, request) {
   socket.send(streamHeader, {
     binary: true
   })
-  debugger;
   console.log(`${this.name}: New WebSocket Connection (` + this.wsServer.clients.size + " total)")
 
   socket.remoteAddress = request.connection.remoteAddress
